@@ -18,6 +18,7 @@
 | [02-measurement-stack.md](./02-measurement-stack.md) | 計測スタック（alp / pt-query-digest / スロークエリログ）= 三種の神器 |
 | [03-indexes.md](./03-indexes.md) | インデックス追加によるクイックウィン（最初のスコア改善） |
 | [04-profiling-pprof-jaeger.md](./04-profiling-pprof-jaeger.md) | Go の詳細プロファイリング（pprof）と分散トレーシング（Jaeger / OpenTelemetry）|
+| [05-static-image-serving.md](./05-static-image-serving.md) | 画像の静的配信化（nginx で /image/* を返す）= Phase 2 |
 
 ---
 
@@ -85,9 +86,11 @@ sudo systemctl start isu-go
 | 時点 | スコア | 備考 |
 |---|---|---|
 | 初期（Go, 改善前） | **0** | タイムアウト多発で点が積み上がらない |
-| インデックス追加後 | **16,447** | fail 0（失敗ゼロで安定）|
+| Phase 1: インデックス追加後 | **16,447** | fail 0（失敗ゼロで安定）|
+| Phase 2: 画像静的配信後（ウォーム）| **25,912** | `/image/*` を nginx が直接配信 |
 
 GET / の応答時間: **約 1.5 秒 → 約 0.07 秒**（インデックス追加の効果）。
+`/image/*` 応答時間合計: **約 154 秒 → 約 13 秒**（nginx 静的配信の効果）。
 
 ---
 

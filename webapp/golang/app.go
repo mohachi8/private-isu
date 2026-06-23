@@ -226,17 +226,43 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 	return posts, nil
 }
 
-func imageURL(p Post) string {
-	ext := ""
-	if p.Mime == "image/jpeg" {
-		ext = ".jpg"
-	} else if p.Mime == "image/png" {
-		ext = ".png"
-	} else if p.Mime == "image/gif" {
-		ext = ".gif"
-	}
+// imageDir is where image files are materialized so nginx can serve them
+// statically (see infra/nginx: location /image/ { try_files $uri @app; }).
+// Path is relative to the Go app's working dir (webapp/golang).
+const imageDir = "../public/image"
 
-	return "/image/" + strconv.Itoa(p.ID) + ext
+func extFromMime(mime string) string {
+	switch mime {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	}
+	return ""
+}
+
+// writeImageFile materializes an image to disk so subsequent requests are
+// served by nginx without hitting the app/DB. Best-effort: errors are logged
+// but not fatal (the app can still serve the bytes directly).
+func writeImageFile(pid int, mime string, data []byte) {
+	ext := extFromMime(mime)
+	if ext == "" {
+		return
+	}
+	if err := os.MkdirAll(imageDir, 0755); err != nil {
+		log.Print(err)
+		return
+	}
+	path := fmt.Sprintf("%s/%d%s", imageDir, pid, ext)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		log.Print(err)
+	}
+}
+
+func imageURL(p Post) string {
+	return "/image/" + strconv.Itoa(p.ID) + extFromMime(p.Mime)
 }
 
 func isLogin(u User) bool {
@@ -267,7 +293,33 @@ func getTemplPath(filename string) string {
 func getInitialize(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dbInitialize(ctx)
+	// Remove run-specific uploaded image files (post id > 10000); seeded images
+	// (id <= 10000) are immutable and kept so they stay materialized on disk.
+	cleanupUploadedImages()
 	w.WriteHeader(http.StatusOK)
+}
+
+// cleanupUploadedImages deletes materialized image files whose post id > 10000,
+// matching dbInitialize which removes posts with id > 10000.
+func cleanupUploadedImages() {
+	entries, err := os.ReadDir(imageDir)
+	if err != nil {
+		return // dir may not exist yet
+	}
+	for _, e := range entries {
+		name := e.Name()
+		dot := strings.IndexByte(name, '.')
+		if dot <= 0 {
+			continue
+		}
+		id, err := strconv.Atoi(name[:dot])
+		if err != nil {
+			continue
+		}
+		if id > 10000 {
+			os.Remove(fmt.Sprintf("%s/%s", imageDir, name))
+		}
+	}
 }
 
 func getLogin(w http.ResponseWriter, r *http.Request) {
@@ -680,6 +732,9 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Materialize the uploaded image to disk for static serving by nginx.
+	writeImageFile(int(pid), mime, filedata)
+
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
 }
 
@@ -704,6 +759,9 @@ func getImage(w http.ResponseWriter, r *http.Request) {
 	if ext == "jpg" && post.Mime == "image/jpeg" ||
 		ext == "png" && post.Mime == "image/png" ||
 		ext == "gif" && post.Mime == "image/gif" {
+		// Materialize to disk so nginx serves this image directly next time.
+		writeImageFile(post.ID, post.Mime, post.Imgdata)
+
 		w.Header().Set("Content-Type", post.Mime)
 		_, err := w.Write(post.Imgdata)
 		if err != nil {

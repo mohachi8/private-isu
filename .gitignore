@@ -32,6 +32,9 @@ webapp/php/vendor/
 webapp/ruby/vendor/
 webapp/ruby/.bundle/
 
+# Materialized images (served statically by nginx; regenerated from DB on demand)
+webapp/public/image/
+
 # === Misc ===
 .DS_Store
 *.log
