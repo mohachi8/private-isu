@@ -61,6 +61,8 @@ type Post struct {
 	Comments     []Comment
 	User         User
 	CSRFToken    string
+	ImageURL     string
+	CreatedAtISO string
 }
 
 type Comment struct {
@@ -200,6 +202,11 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 
 		p.User = author
 		p.CSRFToken = csrfToken
+		// Precompute the image URL and formatted timestamp so the template reads
+		// fields instead of invoking a func / time.Format method via reflection
+		// per post (the dominant render cost).
+		p.ImageURL = imageURL(p)
+		p.CreatedAtISO = p.CreatedAt.Format(ISO8601Format)
 
 		posts = append(posts, p)
 		if len(posts) >= postsPerPage {

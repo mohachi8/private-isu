@@ -29,6 +29,7 @@
 | [13-remove-imgdata-blob-and-disk.md](./13-remove-imgdata-blob-and-disk.md) | 根本対策：画像BLOBをDBから排除・ディスク満杯解消 = Phase 9 |
 | [14-user-cache.md](./14-user-cache.md) | ユーザーの全件インメモリキャッシュ = Phase 10 |
 | [15-comment-cache-and-upload-race.md](./15-comment-cache-and-upload-race.md) | コメント全件キャッシュ & 画像アップロード競合修正 = Phase 11 |
+| [16-template-precompute-fields.md](./16-template-precompute-fields.md) | テンプレートの reflection 呼び出しを事前計算で排除 = Phase 12 |
 
 ---
 
@@ -108,6 +109,7 @@ sudo systemctl start isu-go
 | Phase 9: 画像BLOBをDBから排除 | **172,648** | posts 1.5GB→7MB（全DBがメモリに収容）/ ローカルはCPU頭打ち |
 | Phase 10: ユーザー全件キャッシュ | **201,324** | SELECT users(28%)と毎回のユーザー取得を排除 |
 | Phase 11: コメント全件キャッシュ + アップロード競合修正 | **246,398** | makePostsのDBクエリ2→0本 / fail 0で安定 |
+| Phase 12: テンプレート reflection 呼び出し排除 | **250,204** | imageURL/Formatを事前計算しフィールド参照に |
 
 GET / の応答時間: **約 1.5 秒 → 約 0.07 秒**（インデックス追加の効果）。
 `/image/*` 応答時間合計: **約 154 秒 → 約 13 秒**（nginx 静的配信の効果）。
