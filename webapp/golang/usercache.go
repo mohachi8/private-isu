@@ -2,8 +2,24 @@ package main
 
 import (
 	"context"
+	"sort"
 	"sync"
 )
+
+// bannedPageUsers returns non-admin, non-banned users (newest first) for the
+// /admin/banned page, from the in-memory cache instead of a DB scan.
+func bannedPageUsers() []User {
+	userCacheMu.RLock()
+	out := make([]User, 0, len(usersByID))
+	for _, u := range usersByID {
+		if u.Authority == 0 && u.DelFlg == 0 {
+			out = append(out, u)
+		}
+	}
+	userCacheMu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out
+}
 
 // The users table is tiny (~2k rows) and changes rarely (register / ban /
 // initialize), but it is read on almost every request (session user, post

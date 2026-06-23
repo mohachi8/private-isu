@@ -758,7 +758,7 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 	// ordering within a run stays correct).
 	cid, _ := result.LastInsertId()
 	addComment(Comment{ID: int(cid), PostID: postID, UserID: me.ID, Comment: comment, CreatedAt: time.Now()})
-	statAddComment(me.ID)
+	statAddComment(me.ID, postID)
 	// The post's cached fragments (list: count+latest3, detail: all comments) are stale.
 	invalidatePostFragment(postID)
 	invalidateDetailFragment(postID)
@@ -767,7 +767,6 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 }
 
 func getAdminBanned(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	me := getSessionUser(r)
 	if !isLogin(me) {
 		http.Redirect(w, r, "/", http.StatusFound)
@@ -779,12 +778,7 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users := []User{}
-	err := db.SelectContext(ctx, &users, "SELECT * FROM `users` WHERE `authority` = 0 AND `del_flg` = 0 ORDER BY `created_at` DESC")
-	if err != nil {
-		log.Print(err)
-		return
-	}
+	users := bannedPageUsers()
 
 	bannedTmpl.Execute(w, struct {
 		Users     []User

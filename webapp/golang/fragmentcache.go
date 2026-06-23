@@ -60,10 +60,17 @@ func clearPostFragments() {
 // renderPostList builds the <div class="isu-posts">…</div> block (same wrapper
 // as posts.html) from cached fragments, substituting the CSRF token once.
 func renderPostList(posts []Post, csrfToken string) template.HTML {
-	var b strings.Builder
-	b.WriteString(`<div class="isu-posts">`)
+	frags := make([]string, len(posts))
+	total := 30 // <div class="isu-posts"></div>
 	for i := range posts {
-		b.WriteString(postFragment(posts[i]))
+		frags[i] = postFragment(posts[i])
+		total += len(frags[i])
+	}
+	var b strings.Builder
+	b.Grow(total) // pre-size to avoid reallocations during concatenation
+	b.WriteString(`<div class="isu-posts">`)
+	for _, f := range frags {
+		b.WriteString(f)
 	}
 	b.WriteString(`</div>`)
 	return template.HTML(strings.ReplaceAll(b.String(), csrfSentinel, csrfToken))
