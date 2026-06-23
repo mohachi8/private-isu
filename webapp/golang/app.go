@@ -911,6 +911,13 @@ func main() {
 	}
 	defer db.Close()
 
+	// Reuse DB connections instead of opening one per query. Go's default
+	// MaxIdleConns is 2, which forces constant connect/close churn (and TIME_WAIT
+	// buildup) under load. Keep a warm pool well under MySQL max_connections(151).
+	db.SetMaxOpenConns(100)
+	db.SetMaxIdleConns(100)
+	db.SetConnMaxLifetime(0)
+
 	r := chi.NewRouter()
 
 	r.Get("/initialize", getInitialize)

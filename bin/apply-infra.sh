@@ -15,4 +15,8 @@ echo "==> mysql config"
 sudo cp "$REPO/infra/mysql/conf.d/zz-isucon.cnf" /etc/mysql/conf.d/zz-isucon.cnf
 sudo systemctl restart mysql
 
+echo "==> sysctl"
+sudo cp "$REPO/infra/sysctl/99-isucon.conf" /etc/sysctl.d/99-isucon.conf
+sudo sysctl --quiet -p /etc/sysctl.d/99-isucon.conf
+
 echo "==> done"

@@ -25,6 +25,7 @@
 | [09-template-precompile.md](./09-template-precompile.md) | テンプレートのプリコンパイル（起動時に1回パース）= Phase 6 |
 | [10-mysql-tuning.md](./10-mysql-tuning.md) | MySQL 設定チューニング（buffer pool / fsync / binlog）= Phase 7 |
 | [11-measurement-session.md](./11-measurement-session.md) | 計測ツール4種（alp/pt-query-digest/pprof/Jaeger）の実践と次の打ち手 |
+| [12-infra-tuning-keepalive-pool.md](./12-infra-tuning-keepalive-pool.md) | インフラ層チューニング（keepalive / DBプール / カーネル）= Phase 8 |
 
 ---
 
@@ -100,6 +101,7 @@ sudo systemctl start isu-go
 | Phase 6: テンプレートのプリコンパイル | **149,974** | 毎回の ParseFiles を廃止 |
 | Phase 7: MySQL 設定チューニング | **152,889** | buffer pool 1G / fsync 緩和 / binlog 無効 |
 | 計測セッション（確定値）| **155,417** | 4ツールでボトルネック再特定（[11](./11-measurement-session.md)）|
+| Phase 8: インフラ層チューニング | **166,173** | keepalive/DBプールで接続churn激減 |
 
 GET / の応答時間: **約 1.5 秒 → 約 0.07 秒**（インデックス追加の効果）。
 `/image/*` 応答時間合計: **約 154 秒 → 約 13 秒**（nginx 静的配信の効果）。
