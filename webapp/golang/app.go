@@ -302,6 +302,9 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 	}
 	// Cached post fragments reference comment state, which just reset.
 	clearPostFragments()
+	if err := loadAllPostsCache(ctx); err != nil {
+		log.Print(err)
+	}
 	if err := loadStats(ctx); err != nil {
 		log.Print(err)
 	}
@@ -450,13 +453,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	me := getSessionUser(r)
 
-	results := []Post{}
-
-	err := db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?", fetchPostsLimit)
-	if err != nil {
-		log.Print(err)
-		return
-	}
+	results := newestPosts(fetchPostsLimit)
 
 	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
 	if err != nil {
@@ -483,13 +480,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
-
-	err := db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC LIMIT ?", user.ID, postsPerPage)
-	if err != nil {
-		log.Print(err)
-		return
-	}
+	results := userPosts(user.ID, postsPerPage)
 
 	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
 	if err != nil {
@@ -531,12 +522,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
-	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC LIMIT ?", t.Format(ISO8601Format), fetchPostsLimit)
-	if err != nil {
-		log.Print(err)
-		return
-	}
+	results := postsBefore(t, fetchPostsLimit)
 
 	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
 	if err != nil {
@@ -561,14 +547,12 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
-	// Only metadata is needed to render the post page; the image is loaded via
-	// /image/<id> (nginx/disk), so avoid pulling the large imgdata BLOB here.
-	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `id` = ?", pid)
-	if err != nil {
-		log.Print(err)
+	p0, ok := postByIDCache(pid)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
+	results := []Post{p0}
 
 	posts, err := makePosts(ctx, results, getCSRFToken(r), true)
 	if err != nil {
@@ -685,6 +669,7 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	statAddPost(me.ID, int(pid))
+	addPostToCache(Post{ID: int(pid), UserID: me.ID, Body: r.FormValue("body"), Mime: mime, CreatedAt: time.Now()})
 
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
 }
@@ -898,6 +883,9 @@ func main() {
 	}
 	if err := loadAllComments(context.Background()); err != nil {
 		log.Fatalf("Failed to load comments: %s.", err.Error())
+	}
+	if err := loadAllPostsCache(context.Background()); err != nil {
+		log.Fatalf("Failed to load posts: %s.", err.Error())
 	}
 	if err := loadStats(context.Background()); err != nil {
 		log.Fatalf("Failed to load stats: %s.", err.Error())
