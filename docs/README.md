@@ -34,6 +34,7 @@
 | [18-pprof-labels-and-user-stats.md](./18-pprof-labels-and-user-stats.md) | pprofエンドポイントラベル & ユーザーページ集計のメモリ化 = Phase 14 |
 | [19-cookie-sessions.md](./19-cookie-sessions.md) | セッションを memcached から署名付き Cookie へ = Phase 15 |
 | [20-posts-cache.md](./20-posts-cache.md) | posts メタデータの全件メモリ化 = Phase 16 |
+| [21-detail-cache-and-json-session.md](./21-detail-cache-and-json-session.md) | 詳細ページHTMLキャッシュ / Cookieセッション脱gob = Phase 17・18 |
 
 ---
 
@@ -118,6 +119,8 @@ sudo systemctl start isu-go
 | Phase 14: ユーザー集計メモリ化 + pprofラベル | **276,948** | /@user のDB集計を0本に・エンドポイント別計測 |
 | Phase 15: セッションをCookie化 | **287,588** | 全リクエストのmemcached往復を排除 |
 | Phase 16: posts全件メモリ化 | **327,806** | 読み取りパスが完全にインメモリ化（DBは書き込みのみ）|
+| Phase 17: 詳細HTMLキャッシュ + txn撤去 | **330,056** | /posts/:id をキャッシュ・POST /簡素化 |
+| Phase 18: Cookieセッション脱gob(JSON化) | **333,901** | 全リクエストのgob再コンパイルを排除 |
 
 GET / の応答時間: **約 1.5 秒 → 約 0.07 秒**（インデックス追加の効果）。
 `/image/*` 応答時間合計: **約 154 秒 → 約 13 秒**（nginx 静的配信の効果）。

@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	mysql "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 )
@@ -78,6 +79,13 @@ func init() {
 	// (user_id, csrf_token, flash) is tamper-proof via HMAC; nothing secret.
 	cs := sessions.NewCookieStore([]byte("sendagaya"))
 	cs.Options = &sessions.Options{Path: "/", MaxAge: 86400 * 30, HttpOnly: true}
+	// Use a JSON serializer instead of gob (gob recompiles its type descriptor
+	// on every request; the session is read on every request).
+	for _, c := range cs.Codecs {
+		if sc, ok := c.(*securecookie.SecureCookie); ok {
+			sc.SetSerializer(jsonSessionSerializer{})
+		}
+	}
 	store = cs
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 }
@@ -153,6 +161,8 @@ func getSessionUser(r *http.Request) User {
 	case int:
 		id = v
 	case int64:
+		id = int(v)
+	case float64: // JSON-decoded session value
 		id = int(v)
 	default:
 		return User{}
