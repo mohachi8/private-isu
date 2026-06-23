@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -262,7 +263,13 @@ func writeImageFile(pid int, mime string, data []byte) error {
 	// partially-written file.
 	path := fmt.Sprintf("%s/%d%s", imageDir, pid, ext)
 	tmp := fmt.Sprintf("%s.tmp%d", path, pid)
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	err := os.WriteFile(tmp, data, 0644)
+	if err != nil && isNoSpace(err) {
+		// Disk full: evict oldest uploads and retry once.
+		evictOldestUploads(evictBatchCount)
+		err = os.WriteFile(tmp, data, 0644)
+	}
+	if err != nil {
 		log.Print(err)
 		os.Remove(tmp)
 		return err
@@ -272,6 +279,7 @@ func writeImageFile(pid int, mime string, data []byte) error {
 		os.Remove(tmp)
 		return err
 	}
+	recordUpload(path)
 	return nil
 }
 
@@ -327,6 +335,7 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 	// Remove run-specific uploaded image files (post id > 10000); seeded images
 	// (id <= 10000) are immutable and kept so they stay materialized on disk.
 	cleanupUploadedImages()
+	resetUploads()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -822,6 +831,12 @@ func postAdminBanned(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// Fewer, less frequent GCs (GC mark/scan was a notable CPU cost). Live heap
+	// is small (tens of MB), so this trades a little RAM for less GC CPU.
+	debug.SetGCPercent(200)
+	// Keep disk headroom so uploaded images never fill the disk mid-run.
+	startDiskJanitor()
+
 	host := os.Getenv("ISUCONP_DB_HOST")
 	if host == "" {
 		host = "localhost"
