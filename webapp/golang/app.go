@@ -31,9 +31,14 @@ var (
 )
 
 const (
-	postsPerPage  = 20
-	ISO8601Format = "2006-01-02T15:04:05-07:00"
-	UploadLimit   = 10 * 1024 * 1024 // 10mb
+	postsPerPage = 20
+	// Fetch a buffer of newest posts so makePosts can drop posts by del_flg=1
+	// users and still have >= postsPerPage to show. Joining users to filter in
+	// SQL forces a full users scan + filesort (much slower than reading a few
+	// extra rows via the created_at index), so we filter in Go instead.
+	fetchPostsLimit = postsPerPage * 3
+	ISO8601Format   = "2006-01-02T15:04:05-07:00"
+	UploadLimit     = 10 * 1024 * 1024 // 10mb
 )
 
 type User struct {
@@ -175,44 +180,76 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 	}
 }
 
+// makePosts assembles posts with their comments and authors using only two
+// batched queries (comments + users) regardless of how many posts are passed in,
+// eliminating the previous per-post N+1 query explosion.
 func makePosts(ctx context.Context, results []Post, csrfToken string, allComments bool) ([]Post, error) {
-	var posts []Post
+	if len(results) == 0 {
+		return []Post{}, nil
+	}
 
+	postIDs := make([]int, len(results))
+	for i, p := range results {
+		postIDs[i] = p.ID
+	}
+
+	// 1) Fetch every comment for these posts in one query (newest first).
+	cq, cargs, err := sqlx.In("SELECT * FROM `comments` WHERE `post_id` IN (?) ORDER BY `created_at` DESC", postIDs)
+	if err != nil {
+		return nil, err
+	}
+	var allCmts []Comment
+	if err := db.SelectContext(ctx, &allCmts, db.Rebind(cq), cargs...); err != nil {
+		return nil, err
+	}
+
+	commentsByPost := make(map[int][]Comment)
+	commentCount := make(map[int]int)
+	userIDSet := make(map[int]struct{})
+	for _, c := range allCmts {
+		commentCount[c.PostID]++
+		commentsByPost[c.PostID] = append(commentsByPost[c.PostID], c)
+		userIDSet[c.UserID] = struct{}{}
+	}
 	for _, p := range results {
-		err := db.GetContext(ctx, &p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
-		if err != nil {
-			return nil, err
-		}
+		userIDSet[p.UserID] = struct{}{}
+	}
 
-		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
-		if !allComments {
-			query += " LIMIT 3"
-		}
-		var comments []Comment
-		err = db.SelectContext(ctx, &comments, query, p.ID)
-		if err != nil {
-			return nil, err
-		}
+	// 2) Fetch every needed user (post authors + comment authors) in one query.
+	userIDs := make([]int, 0, len(userIDSet))
+	for id := range userIDSet {
+		userIDs = append(userIDs, id)
+	}
+	usersByID := make(map[int]User, len(userIDs))
+	uq, uargs, err := sqlx.In("SELECT * FROM `users` WHERE `id` IN (?)", userIDs)
+	if err != nil {
+		return nil, err
+	}
+	var us []User
+	if err := db.SelectContext(ctx, &us, db.Rebind(uq), uargs...); err != nil {
+		return nil, err
+	}
+	for _, u := range us {
+		usersByID[u.ID] = u
+	}
 
-		for i := range comments {
-			err := db.GetContext(ctx, &comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
-			if err != nil {
-				return nil, err
-			}
+	var posts []Post
+	for _, p := range results {
+		p.CommentCount = commentCount[p.ID]
+
+		cmts := commentsByPost[p.ID] // newest first
+		if !allComments && len(cmts) > 3 {
+			cmts = cmts[:3]
 		}
-
-		// reverse
-		for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
-			comments[i], comments[j] = comments[j], comments[i]
+		// Attach authors and reverse to oldest-first for display.
+		cs := make([]Comment, len(cmts))
+		for i, c := range cmts {
+			c.User = usersByID[c.UserID]
+			cs[len(cmts)-1-i] = c
 		}
+		p.Comments = cs
 
-		p.Comments = comments
-
-		err = db.GetContext(ctx, &p.User, "SELECT * FROM `users` WHERE `id` = ?", p.UserID)
-		if err != nil {
-			return nil, err
-		}
-
+		p.User = usersByID[p.UserID]
 		p.CSRFToken = csrfToken
 
 		if p.User.DelFlg == 0 {
@@ -446,7 +483,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 
 	results := []Post{}
 
-	err := db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC")
+	err := db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?", fetchPostsLimit)
 	if err != nil {
 		log.Print(err)
 		return
@@ -493,7 +530,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 
 	results := []Post{}
 
-	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC", user.ID)
+	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC LIMIT ?", user.ID, postsPerPage)
 	if err != nil {
 		log.Print(err)
 		return
@@ -582,7 +619,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := []Post{}
-	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC", t.Format(ISO8601Format))
+	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC LIMIT ?", t.Format(ISO8601Format), fetchPostsLimit)
 	if err != nil {
 		log.Print(err)
 		return
@@ -897,6 +934,9 @@ func main() {
 	cfg.DBName = dbname
 	cfg.Params = map[string]string{
 		"charset": "utf8mb4",
+		// Interpolate params client-side to avoid a server round-trip per query
+		// (removes the ADMIN PREPARE overhead seen in pt-query-digest).
+		"interpolateParams": "true",
 	}
 	cfg.ParseTime = true
 	cfg.Loc = time.Local

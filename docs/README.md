@@ -19,6 +19,7 @@
 | [03-indexes.md](./03-indexes.md) | インデックス追加によるクイックウィン（最初のスコア改善） |
 | [04-profiling-pprof-jaeger.md](./04-profiling-pprof-jaeger.md) | Go の詳細プロファイリング（pprof）と分散トレーシング（Jaeger / OpenTelemetry）|
 | [05-static-image-serving.md](./05-static-image-serving.md) | 画像の静的配信化（nginx で /image/* を返す）= Phase 2 |
+| [06-makeposts-n1-and-limit.md](./06-makeposts-n1-and-limit.md) | makePosts の N+1 解消・クエリ LIMIT 化・interpolateParams = Phase 3/4 |
 
 ---
 
@@ -88,6 +89,7 @@ sudo systemctl start isu-go
 | 初期（Go, 改善前） | **0** | タイムアウト多発で点が積み上がらない |
 | Phase 1: インデックス追加後 | **16,447** | fail 0（失敗ゼロで安定）|
 | Phase 2: 画像静的配信後（ウォーム）| **25,912** | `/image/*` を nginx が直接配信 |
+| Phase 3/4: N+1解消・LIMIT・interpolateParams | **100,458** | DB総実行時間 445s→70s |
 
 GET / の応答時間: **約 1.5 秒 → 約 0.07 秒**（インデックス追加の効果）。
 `/image/*` 応答時間合計: **約 154 秒 → 約 13 秒**（nginx 静的配信の効果）。
