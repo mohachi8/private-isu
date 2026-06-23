@@ -68,3 +68,45 @@ func renderPostList(posts []Post, csrfToken string) template.HTML {
 	b.WriteString(`</div>`)
 	return template.HTML(strings.ReplaceAll(b.String(), csrfSentinel, csrfToken))
 }
+
+// --- detail page (/posts/:id) fragment cache: full comments, not just 3 ---
+
+var (
+	detailFragMu    sync.RWMutex
+	detailFragCache = map[int]string{}
+)
+
+func postDetailFragment(p Post) string {
+	detailFragMu.RLock()
+	s, ok := detailFragCache[p.ID]
+	detailFragMu.RUnlock()
+	if ok {
+		return s
+	}
+	p.CSRFToken = csrfSentinel
+	var buf bytes.Buffer
+	if err := postFragmentTmpl.Execute(&buf, p); err != nil {
+		return buf.String()
+	}
+	s = buf.String()
+	detailFragMu.Lock()
+	detailFragCache[p.ID] = s
+	detailFragMu.Unlock()
+	return s
+}
+
+func invalidateDetailFragment(postID int) {
+	detailFragMu.Lock()
+	delete(detailFragCache, postID)
+	detailFragMu.Unlock()
+}
+
+func clearDetailFragments() {
+	detailFragMu.Lock()
+	detailFragCache = map[int]string{}
+	detailFragMu.Unlock()
+}
+
+func renderPostDetail(p Post, csrfToken string) template.HTML {
+	return template.HTML(strings.ReplaceAll(postDetailFragment(p), csrfSentinel, csrfToken))
+}

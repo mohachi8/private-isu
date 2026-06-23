@@ -302,6 +302,7 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 	}
 	// Cached post fragments reference comment state, which just reset.
 	clearPostFragments()
+	clearDetailFragments()
 	if err := loadAllPostsCache(ctx); err != nil {
 		log.Print(err)
 	}
@@ -570,9 +571,9 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 
 	postIDTmpl.Execute(w, struct {
-		Post Post
-		Me   User
-	}{p, me})
+		PostHTML template.HTML
+		Me       User
+	}{renderPostDetail(p, getCSRFToken(r)), me})
 }
 
 func postIndex(w http.ResponseWriter, r *http.Request) {
@@ -633,43 +634,31 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Image bytes go to disk, not the DB. Crucially, write the file BEFORE the
-	// post becomes visible: INSERT inside a transaction, write the file, then
-	// commit. Otherwise a concurrent request could see the new post on the index
-	// and fetch its image before the file exists (served as wrong/missing).
-	tx, err := db.BeginTxx(ctx, nil)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-	result, err := tx.ExecContext(
+	// Image bytes go to disk, not the DB. Reads come from the in-memory caches,
+	// so a post is only "visible" once addPostToCache runs — do that LAST, after
+	// the image file exists, so no reader can fetch the image before it's written.
+	body := r.FormValue("body")
+	result, err := db.ExecContext(
 		ctx,
 		"INSERT INTO `posts` (`user_id`, `mime`, `body`) VALUES (?,?,?)",
 		me.ID,
 		mime,
-		r.FormValue("body"),
+		body,
 	)
 	if err != nil {
-		tx.Rollback()
 		log.Print(err)
 		return
 	}
 	pid, err := result.LastInsertId()
 	if err != nil {
-		tx.Rollback()
 		log.Print(err)
 		return
 	}
 
-	// Materialize the uploaded image to disk before the post is committed.
+	// Materialize the uploaded image, then make the post visible via the caches.
 	writeImageFile(int(pid), mime, filedata)
-
-	if err := tx.Commit(); err != nil {
-		log.Print(err)
-		return
-	}
 	statAddPost(me.ID, int(pid))
-	addPostToCache(Post{ID: int(pid), UserID: me.ID, Body: r.FormValue("body"), Mime: mime, CreatedAt: time.Now()})
+	addPostToCache(Post{ID: int(pid), UserID: me.ID, Body: body, Mime: mime, CreatedAt: time.Now()})
 
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
 }
@@ -741,8 +730,9 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 	cid, _ := result.LastInsertId()
 	addComment(Comment{ID: int(cid), PostID: postID, UserID: me.ID, Comment: comment, CreatedAt: time.Now()})
 	statAddComment(me.ID)
-	// The post's cached fragment (comment count + latest 3) is now stale.
+	// The post's cached fragments (list: count+latest3, detail: all comments) are stale.
 	invalidatePostFragment(postID)
+	invalidateDetailFragment(postID)
 
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }

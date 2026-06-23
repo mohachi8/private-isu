@@ -21,7 +21,6 @@ var (
 	postIDTmpl = template.Must(template.New("layout.html").Funcs(tmplFuncs).ParseFiles(
 		getTemplPath("layout.html"),
 		getTemplPath("post_id.html"),
-		getTemplPath("post.html"),
 	))
 	loginTmpl = template.Must(template.ParseFiles(
 		getTemplPath("layout.html"),
