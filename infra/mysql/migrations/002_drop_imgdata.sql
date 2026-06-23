@@ -1,0 +1,13 @@
+-- Move image storage out of the DB entirely. Images are materialized to
+-- ../public/image and served by nginx (see bin/materialize-images.sh and the
+-- getImage/postIndex handlers). This shrinks the posts table from ~1.5GB to a
+-- few MB so it fits comfortably in the InnoDB buffer pool.
+--
+-- PREREQUISITES before running:
+--   1. All seeded images materialized to disk: bin/materialize-images.sh
+--   2. App deployed with disk-only image serving (getImage reads files,
+--      postIndex INSERT omits imgdata).
+-- RECOVERY: restore from /home/isucon/backup/mysqldump.sql.bz2 if needed.
+--
+-- INPLACE rebuild reclaims the disk space in one step (needs ~table-size temp).
+ALTER TABLE posts DROP COLUMN imgdata, ALGORITHM=INPLACE, LOCK=NONE;

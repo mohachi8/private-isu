@@ -616,7 +616,9 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := []Post{}
-	err = db.SelectContext(ctx, &results, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	// Only metadata is needed to render the post page; the image is loaded via
+	// /image/<id> (nginx/disk), so avoid pulling the large imgdata BLOB here.
+	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `id` = ?", pid)
 	if err != nil {
 		log.Print(err)
 		return
@@ -701,13 +703,13 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := "INSERT INTO `posts` (`user_id`, `mime`, `imgdata`, `body`) VALUES (?,?,?,?)"
+	// Image bytes go to disk (writeImageFile below), not the DB.
+	query := "INSERT INTO `posts` (`user_id`, `mime`, `body`) VALUES (?,?,?)"
 	result, err := db.ExecContext(
 		ctx,
 		query,
 		me.ID,
 		mime,
-		filedata,
 		r.FormValue("body"),
 	)
 	if err != nil {
@@ -727,40 +729,39 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
 }
 
+// getImage serves images from disk only. Images are materialized to
+// ../public/image (seeded via bin/materialize-images.sh, uploads via postIndex)
+// and nginx serves existing files directly via try_files; this handler is only
+// reached on a miss. Image bytes are no longer stored in the DB.
 func getImage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	pidStr := r.PathValue("id")
-	pid, err := strconv.Atoi(pidStr)
+	pid, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	post := Post{}
-	err = db.GetContext(ctx, &post, "SELECT * FROM `posts` WHERE `id` = ?", pid)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-
 	ext := r.PathValue("ext")
-
-	if ext == "jpg" && post.Mime == "image/jpeg" ||
-		ext == "png" && post.Mime == "image/png" ||
-		ext == "gif" && post.Mime == "image/gif" {
-		// Materialize to disk so nginx serves this image directly next time.
-		writeImageFile(post.ID, post.Mime, post.Imgdata)
-
-		w.Header().Set("Content-Type", post.Mime)
-		_, err := w.Write(post.Imgdata)
-		if err != nil {
-			log.Print(err)
-			return
-		}
+	var mime string
+	switch ext {
+	case "jpg":
+		mime = "image/jpeg"
+	case "png":
+		mime = "image/png"
+	case "gif":
+		mime = "image/gif"
+	default:
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	w.WriteHeader(http.StatusNotFound)
+	data, err := os.ReadFile(fmt.Sprintf("%s/%d.%s", imageDir, pid, ext))
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", mime)
+	w.Write(data)
 }
 
 func postComment(w http.ResponseWriter, r *http.Request) {
