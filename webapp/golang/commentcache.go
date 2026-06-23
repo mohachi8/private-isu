@@ -37,13 +37,19 @@ func addComment(c Comment) {
 	commentCacheMu.Unlock()
 }
 
-// commentsForPost returns a copy of a post's comments (oldest-first) so callers
-// can read safely without holding the lock.
-func commentsForPost(postID int) []Comment {
+// commentSummary returns the total comment count and a copy of the latest
+// `limit` comments (oldest-first). limit <= 0 means all comments. For list
+// views (limit=3) this copies at most 3 entries instead of the whole slice.
+func commentSummary(postID int, limit int) (count int, latest []Comment) {
 	commentCacheMu.RLock()
 	src := commentsByPostID[postID]
-	out := make([]Comment, len(src))
-	copy(out, src)
+	count = len(src)
+	n := count
+	if limit > 0 && limit < n {
+		n = limit
+	}
+	latest = make([]Comment, n)
+	copy(latest, src[count-n:])
 	commentCacheMu.RUnlock()
-	return out
+	return count, latest
 }

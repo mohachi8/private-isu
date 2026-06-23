@@ -114,9 +114,13 @@ func tryLogin(ctx context.Context, accountName, password string) *User {
 	}
 }
 
+var (
+	accountNameRe = regexp.MustCompile(`\A[0-9a-zA-Z_]{3,}\z`)
+	passwordRe    = regexp.MustCompile(`\A[0-9a-zA-Z_]{6,}\z`)
+)
+
 func validateUser(accountName, password string) bool {
-	return regexp.MustCompile(`\A[0-9a-zA-Z_]{3,}\z`).MatchString(accountName) &&
-		regexp.MustCompile(`\A[0-9a-zA-Z_]{6,}\z`).MatchString(password)
+	return accountNameRe.MatchString(accountName) && passwordRe.MatchString(password)
 }
 
 // digest returns the lowercase hex SHA-512 of src. This replaces the original
@@ -191,11 +195,12 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 			continue
 		}
 
-		cs := commentsForPost(p.ID) // oldest-first copy
-		p.CommentCount = len(cs)
-		if !allComments && len(cs) > 3 {
-			cs = cs[len(cs)-3:] // latest 3, still oldest-first
+		limit := 3
+		if allComments {
+			limit = 0 // all
 		}
+		count, cs := commentSummary(p.ID, limit)
+		p.CommentCount = count
 		for i := range cs {
 			cs[i].User, _ = userByID(cs[i].UserID)
 		}
