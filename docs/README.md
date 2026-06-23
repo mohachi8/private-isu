@@ -32,6 +32,7 @@
 | [16-template-precompute-fields.md](./16-template-precompute-fields.md) | テンプレートの reflection 呼び出しを事前計算で排除 = Phase 12 |
 | [17-html-fragment-cache.md](./17-html-fragment-cache.md) | 投稿HTML断片のキャッシュ（CSRFはプレースホルダ置換）= Phase 13 |
 | [18-pprof-labels-and-user-stats.md](./18-pprof-labels-and-user-stats.md) | pprofエンドポイントラベル & ユーザーページ集計のメモリ化 = Phase 14 |
+| [19-cookie-sessions.md](./19-cookie-sessions.md) | セッションを memcached から署名付き Cookie へ = Phase 15 |
 
 ---
 
@@ -114,6 +115,7 @@ sudo systemctl start isu-go
 | Phase 12: テンプレート reflection 呼び出し排除 | **250,204** | imageURL/Formatを事前計算しフィールド参照に |
 | Phase 13: 投稿HTML断片キャッシュ | **270,090** | 一覧描画を連結+CSRF置換に（CPU最大要素を削減）|
 | Phase 14: ユーザー集計メモリ化 + pprofラベル | **276,948** | /@user のDB集計を0本に・エンドポイント別計測 |
+| Phase 15: セッションをCookie化 | **287,588** | 全リクエストのmemcached往復を排除 |
 
 GET / の応答時間: **約 1.5 秒 → 約 0.07 秒**（インデックス追加の効果）。
 `/image/*` 応答時間合計: **約 154 秒 → 約 13 秒**（nginx 静的配信の効果）。

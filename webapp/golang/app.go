@@ -18,8 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bradfitz/gomemcache/memcache"
-	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
 	"github.com/go-chi/chi/v5"
 	mysql "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
@@ -28,7 +26,7 @@ import (
 
 var (
 	db    *sqlx.DB
-	store *gsm.MemcacheStore
+	store sessions.Store
 )
 
 const (
@@ -75,15 +73,12 @@ type Comment struct {
 	User      User
 }
 
-var memcacheClient *memcache.Client
-
 func init() {
-	memdAddr := os.Getenv("ISUCONP_MEMCACHED_ADDRESS")
-	if memdAddr == "" {
-		memdAddr = "localhost:11211"
-	}
-	memcacheClient = memcache.New(memdAddr)
-	store = gsm.NewMemcacheStore(memcacheClient, "iscogram_", []byte("sendagaya"))
+	// Signed cookie sessions: no per-request memcached round-trip. Session data
+	// (user_id, csrf_token, flash) is tamper-proof via HMAC; nothing secret.
+	cs := sessions.NewCookieStore([]byte("sendagaya"))
+	cs.Options = &sessions.Options{Path: "/", MaxAge: 86400 * 30, HttpOnly: true}
+	store = cs
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 }
 
