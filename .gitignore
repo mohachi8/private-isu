@@ -1,0 +1,37 @@
+# === Large data / generated files (not for GitHub) ===
+
+# Benchmarker
+benchmarker/bin/
+*.test
+
+# Benchmark user data (images ~1.2GB, dumps, etc.)
+benchmarker/userdata/img/
+benchmarker/userdata/img.zip
+benchmarker/userdata/dump.sql
+benchmarker/userdata/dump.sql.bz2
+benchmarker/userdata/__MACOSX/
+
+# === Build artifacts / dependencies ===
+
+# Go
+webapp/golang/app
+
+# Node
+webapp/node/node_modules/
+webapp/node/dist/
+
+# Python
+webapp/python/.venv/
+__pycache__/
+*.pyc
+
+# PHP
+webapp/php/vendor/
+
+# Ruby
+webapp/ruby/vendor/
+webapp/ruby/.bundle/
+
+# === Misc ===
+.DS_Store
+*.log
