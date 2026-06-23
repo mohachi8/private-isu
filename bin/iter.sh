@@ -1,10 +1,22 @@
 #!/bin/bash
 # Fast PDCA loop: build -> restart app -> short benchmark -> print score.
-# Usage: bin/iter.sh [duration]   (default 25s; use 60s for an "official" run)
+# Usage: bin/iter.sh [duration] [-m]
+#   duration  benchmark length (default 25s; use 60s for an "official" run)
+#   -m        also sample per-process/per-core metrics during the run
+# Env: TARGET (default http://localhost), BENCH_TASKSET (e.g. "taskset -c 1")
 # Does NOT restart MySQL (keeps the buffer pool warm).
 set -uo pipefail
 export PATH="$PATH:/home/isucon/.local/go/bin"
-DUR="${1:-25s}"
+BIN_DIR=/home/isucon/private_isu/bin
+DUR="25s"
+METRICS=0
+for a in "$@"; do
+  case "$a" in
+    -m) METRICS=1 ;;
+    *) DUR="$a" ;;
+  esac
+done
+TARGET="${TARGET:-http://localhost}"
 
 cd /home/isucon/private_isu/webapp/golang
 if ! go build -o app; then
@@ -21,8 +33,20 @@ for i in $(seq 1 60); do
 done
 [ "$up" = "1" ] || { echo "APP NOT UP"; exit 1; }
 
-cd /home/isucon/private_isu/benchmarker
 sudo truncate -s 0 /var/log/nginx/access.log /var/log/mysql/mysql-slow.log 2>/dev/null || true
-./bin/benchmarker -t http://localhost -u ./userdata -benchmark-timeout "$DUR" 2>&1 \
+
+MPID=""
+if [ "$METRICS" = "1" ]; then
+  "$BIN_DIR/metrics.sh" "$(echo "$DUR" | sed 's/s$//')" > /tmp/iter_metrics.txt 2>&1 &
+  MPID=$!
+fi
+
+cd /home/isucon/private_isu/benchmarker
+${BENCH_TASKSET:-} ./bin/benchmarker -t "$TARGET" -u ./userdata -benchmark-timeout "$DUR" 2>&1 \
   | grep -oE '"(pass|score|fail)":[a-z0-9]+' | tr '\n' ' '
 echo
+
+if [ -n "$MPID" ]; then
+  wait "$MPID" 2>/dev/null
+  echo "===== metrics ====="; cat /tmp/iter_metrics.txt
+fi
