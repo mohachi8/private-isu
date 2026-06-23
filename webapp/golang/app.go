@@ -307,6 +307,9 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 	}
 	// Cached post fragments reference comment state, which just reset.
 	clearPostFragments()
+	if err := loadStats(ctx); err != nil {
+		log.Print(err)
+	}
 	// Remove run-specific uploaded image files (post id > 10000); seeded images
 	// (id <= 10000) are immutable and kept so they stay materialized on disk.
 	cleanupUploadedImages()
@@ -499,41 +502,8 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commentCount := 0
-	err = db.GetContext(ctx, &commentCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?", user.ID)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-
-	postIDs := []int{}
-	err = db.SelectContext(ctx, &postIDs, "SELECT `id` FROM `posts` WHERE `user_id` = ?", user.ID)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-	postCount := len(postIDs)
-
-	commentedCount := 0
-	if postCount > 0 {
-		s := []string{}
-		for range postIDs {
-			s = append(s, "?")
-		}
-		placeholder := strings.Join(s, ", ")
-
-		// convert []int -> []any
-		args := make([]any, len(postIDs))
-		for i, v := range postIDs {
-			args[i] = v
-		}
-
-		err = db.GetContext(ctx, &commentedCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `post_id` IN ("+placeholder+")", args...)
-		if err != nil {
-			log.Print(err)
-			return
-		}
-	}
+	// All three aggregates come from in-memory caches (no DB).
+	postCount, commentCount, commentedCount := userStats(user.ID)
 
 	me := getSessionUser(r)
 
@@ -719,6 +689,7 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		log.Print(err)
 		return
 	}
+	statAddPost(me.ID, int(pid))
 
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
 }
@@ -789,6 +760,7 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 	// ordering within a run stays correct).
 	cid, _ := result.LastInsertId()
 	addComment(Comment{ID: int(cid), PostID: postID, UserID: me.ID, Comment: comment, CreatedAt: time.Now()})
+	statAddComment(me.ID)
 	// The post's cached fragment (comment count + latest 3) is now stale.
 	invalidatePostFragment(postID)
 
@@ -932,8 +904,12 @@ func main() {
 	if err := loadAllComments(context.Background()); err != nil {
 		log.Fatalf("Failed to load comments: %s.", err.Error())
 	}
+	if err := loadStats(context.Background()); err != nil {
+		log.Fatalf("Failed to load stats: %s.", err.Error())
+	}
 
 	r := chi.NewRouter()
+	r.Use(pprofLabelMiddleware)
 
 	r.Get("/initialize", getInitialize)
 	r.Get("/login", getLogin)

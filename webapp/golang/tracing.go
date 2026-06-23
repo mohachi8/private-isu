@@ -5,9 +5,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	// pprof registers its handlers on http.DefaultServeMux via init().
 	_ "net/http/pprof"
+	"runtime/pprof"
 
 	"github.com/XSAM/otelsql"
 	"github.com/jmoiron/sqlx"
@@ -74,6 +76,35 @@ func openDB(dsn string) (*sqlx.DB, error) {
 		return sqlx.NewDb(sqlDB, "mysql"), nil
 	}
 	return sqlx.Open("mysql", dsn)
+}
+
+// pprofLabelMiddleware tags each request's CPU/goroutine samples with its route
+// pattern so pprof can be sliced per endpoint:
+//
+//	go tool pprof -tagfocus='endpoint:GET /' app cpu.pprof
+//	(or the `tags` command inside go tool pprof)
+func normalizeEndpoint(p string) string {
+	switch {
+	case p == "/":
+		return "/"
+	case strings.HasPrefix(p, "/posts/"):
+		return "/posts/:id"
+	case strings.HasPrefix(p, "/image/"):
+		return "/image/:id"
+	case strings.HasPrefix(p, "/@"):
+		return "/@:name"
+	default:
+		return p
+	}
+}
+
+func pprofLabelMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ep := r.Method + " " + normalizeEndpoint(r.URL.Path)
+		pprof.Do(r.Context(), pprof.Labels("endpoint", ep), func(ctx context.Context) {
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	})
 }
 
 // wrapHandler adds the otelhttp middleware when tracing is enabled.
