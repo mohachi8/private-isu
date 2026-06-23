@@ -892,7 +892,11 @@ func main() {
 	}
 
 	r := chi.NewRouter()
-	r.Use(pprofLabelMiddleware)
+	// pprof endpoint labels add a small per-request cost; enable only when
+	// profiling (PPROF_LABELS=1), off by default for scoring runs.
+	if os.Getenv("PPROF_LABELS") == "1" {
+		r.Use(pprofLabelMiddleware)
+	}
 
 	r.Get("/initialize", getInitialize)
 	r.Get("/login", getLogin)
