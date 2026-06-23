@@ -7,3 +7,15 @@ slow_query_log_file = /var/log/mysql/mysql-slow.log
 # long_query_time = 0 logs ALL queries — ideal during a benchmark run.
 # Raise this (e.g. 0.1) for normal operation to reduce log volume.
 long_query_time     = 0
+
+# --- performance tuning (durability relaxed; OK for benchmarking) ---
+# Cache the working set (metadata; images are served from disk by nginx).
+innodb_buffer_pool_size        = 1G
+# Flush redo to OS cache and fsync ~once/sec instead of every commit.
+innodb_flush_log_at_trx_commit = 2
+# Avoid double-buffering between InnoDB and the OS page cache.
+innodb_flush_method            = O_DIRECT
+# Larger redo log -> fewer checkpoint flushes under write load.
+innodb_redo_log_capacity       = 256M
+# Binary logging isn't needed for the benchmark; disabling it cuts write cost.
+disable-log-bin
