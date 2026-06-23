@@ -844,7 +844,21 @@ func main() {
 	cfg.Loc = time.Local
 	dsn := cfg.FormatDSN()
 
-	db, err = sqlx.Open("mysql", dsn)
+	// pprof: always-on localhost-only profiling endpoint (:6060).
+	startPprof()
+
+	// OpenTelemetry tracing -> Jaeger. Enabled only when ENABLE_TRACING=1.
+	if tracingEnabled() {
+		shutdown, err := initTracer(context.Background())
+		if err != nil {
+			log.Printf("failed to init tracer: %s", err.Error())
+		} else {
+			defer shutdown(context.Background())
+			log.Print("OpenTelemetry tracing enabled -> OTLP")
+		}
+	}
+
+	db, err = openDB(dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
@@ -869,5 +883,5 @@ func main() {
 	r.Get(`/@{accountName:[0-9a-zA-Z_]+}`, getAccountName)
 	r.Mount("/", http.FileServer(http.Dir("../public")))
 
-	log.Fatal(http.ListenAndServe(":8080", r))
+	log.Fatal(http.ListenAndServe(":8080", wrapHandler(r)))
 }

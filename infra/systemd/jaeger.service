@@ -1,0 +1,18 @@
+[Unit]
+Description=Jaeger all-in-one (tracing backend for private-isu)
+After=network.target
+
+[Service]
+User=isucon
+Group=isucon
+# In-memory storage: traces are kept only while jaeger runs (fine for benchmarking).
+Environment=SPAN_STORAGE_TYPE=memory
+Environment=COLLECTOR_OTLP_ENABLED=true
+# Cap memory so a long run can't OOM the box.
+Environment=MEMORY_MAX_TRACES=100000
+ExecStart=/usr/local/bin/jaeger-all-in-one
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+# Ports: UI 16686 / OTLP gRPC 4317 / OTLP HTTP 4318
