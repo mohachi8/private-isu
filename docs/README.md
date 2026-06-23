@@ -22,6 +22,7 @@
 | [06-makeposts-n1-and-limit.md](./06-makeposts-n1-and-limit.md) | makePosts の N+1 解消・クエリ LIMIT 化・interpolateParams = Phase 3/4 |
 | [07-native-password-hash.md](./07-native-password-hash.md) | パスワードハッシュを Go ネイティブ化（openssl 起動を廃止）= Phase 1 |
 | [08-static-assets-nginx.md](./08-static-assets-nginx.md) | 静的ファイル（css/js/favicon）を nginx 直配信 = Phase 5 |
+| [09-template-precompile.md](./09-template-precompile.md) | テンプレートのプリコンパイル（起動時に1回パース）= Phase 6 |
 
 ---
 
@@ -94,6 +95,7 @@ sudo systemctl start isu-go
 | Phase 3/4: N+1解消・LIMIT・interpolateParams | **100,458** | DB総実行時間 445s→70s |
 | Phase 1: パスワードハッシュ Go ネイティブ化 | **128,763** | openssl 外部起動を廃止 |
 | Phase 5: 静的ファイル nginx 直配信 | **141,992** | css/js/favicon をアプリ未経由に |
+| Phase 6: テンプレートのプリコンパイル | **149,974** | 毎回の ParseFiles を廃止 |
 
 GET / の応答時間: **約 1.5 秒 → 約 0.07 秒**（インデックス追加の効果）。
 `/image/*` 応答時間合計: **約 154 秒 → 約 13 秒**（nginx 静的配信の効果）。
