@@ -176,72 +176,32 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 	}
 }
 
-// makePosts assembles posts with their comments and authors using only two
-// batched queries (comments + users) regardless of how many posts are passed in,
-// eliminating the previous per-post N+1 query explosion.
+// makePosts assembles posts with their comments and authors entirely from the
+// in-memory comment and user caches — no DB queries — eliminating what used to
+// be the dominant query cost (SELECT comments + SELECT users).
 func makePosts(ctx context.Context, results []Post, csrfToken string, allComments bool) ([]Post, error) {
-	if len(results) == 0 {
-		return []Post{}, nil
-	}
+	posts := make([]Post, 0, len(results))
 
-	postIDs := make([]int, len(results))
-	for i, p := range results {
-		postIDs[i] = p.ID
-	}
-
-	// 1) Fetch every comment for these posts in one query (newest first).
-	cq, cargs, err := sqlx.In("SELECT * FROM `comments` WHERE `post_id` IN (?) ORDER BY `created_at` DESC", postIDs)
-	if err != nil {
-		return nil, err
-	}
-	var allCmts []Comment
-	if err := db.SelectContext(ctx, &allCmts, db.Rebind(cq), cargs...); err != nil {
-		return nil, err
-	}
-
-	commentsByPost := make(map[int][]Comment)
-	commentCount := make(map[int]int)
-	userIDSet := make(map[int]struct{})
-	for _, c := range allCmts {
-		commentCount[c.PostID]++
-		commentsByPost[c.PostID] = append(commentsByPost[c.PostID], c)
-		userIDSet[c.UserID] = struct{}{}
-	}
 	for _, p := range results {
-		userIDSet[p.UserID] = struct{}{}
-	}
-
-	// 2) Resolve every needed user (post authors + comment authors) from the
-	// in-memory user cache instead of querying the DB.
-	userMap := make(map[int]User, len(userIDSet))
-	for id := range userIDSet {
-		if u, ok := userByID(id); ok {
-			userMap[id] = u
+		author, ok := userByID(p.UserID)
+		if !ok || author.DelFlg != 0 {
+			continue
 		}
-	}
 
-	var posts []Post
-	for _, p := range results {
-		p.CommentCount = commentCount[p.ID]
-
-		cmts := commentsByPost[p.ID] // newest first
-		if !allComments && len(cmts) > 3 {
-			cmts = cmts[:3]
+		cs := commentsForPost(p.ID) // oldest-first copy
+		p.CommentCount = len(cs)
+		if !allComments && len(cs) > 3 {
+			cs = cs[len(cs)-3:] // latest 3, still oldest-first
 		}
-		// Attach authors and reverse to oldest-first for display.
-		cs := make([]Comment, len(cmts))
-		for i, c := range cmts {
-			c.User = userMap[c.UserID]
-			cs[len(cmts)-1-i] = c
+		for i := range cs {
+			cs[i].User, _ = userByID(cs[i].UserID)
 		}
 		p.Comments = cs
 
-		p.User = userMap[p.UserID]
+		p.User = author
 		p.CSRFToken = csrfToken
 
-		if p.User.DelFlg == 0 {
-			posts = append(posts, p)
-		}
+		posts = append(posts, p)
 		if len(posts) >= postsPerPage {
 			break
 		}
@@ -279,8 +239,15 @@ func writeImageFile(pid int, mime string, data []byte) {
 		log.Print(err)
 		return
 	}
+	// Write atomically (temp + rename) so a concurrent GET never sees a
+	// partially-written file.
 	path := fmt.Sprintf("%s/%d%s", imageDir, pid, ext)
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	tmp := fmt.Sprintf("%s.tmp%d", path, pid)
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		log.Print(err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
 		log.Print(err)
 	}
 }
@@ -317,8 +284,12 @@ func getTemplPath(filename string) string {
 func getInitialize(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dbInitialize(ctx)
-	// Rebuild the user cache: initialize resets del_flg and removes users id>1000.
+	// Rebuild the caches: initialize resets del_flg, removes users id>1000 and
+	// comments id>100000.
 	if err := loadAllUsers(ctx); err != nil {
+		log.Print(err)
+	}
+	if err := loadAllComments(ctx); err != nil {
 		log.Print(err)
 	}
 	// Remove run-specific uploaded image files (post id > 10000); seeded images
@@ -697,28 +668,41 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Image bytes go to disk (writeImageFile below), not the DB.
-	query := "INSERT INTO `posts` (`user_id`, `mime`, `body`) VALUES (?,?,?)"
-	result, err := db.ExecContext(
+	// Image bytes go to disk, not the DB. Crucially, write the file BEFORE the
+	// post becomes visible: INSERT inside a transaction, write the file, then
+	// commit. Otherwise a concurrent request could see the new post on the index
+	// and fetch its image before the file exists (served as wrong/missing).
+	tx, err := db.BeginTxx(ctx, nil)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	result, err := tx.ExecContext(
 		ctx,
-		query,
+		"INSERT INTO `posts` (`user_id`, `mime`, `body`) VALUES (?,?,?)",
 		me.ID,
 		mime,
 		r.FormValue("body"),
 	)
 	if err != nil {
+		tx.Rollback()
 		log.Print(err)
 		return
 	}
-
 	pid, err := result.LastInsertId()
 	if err != nil {
+		tx.Rollback()
 		log.Print(err)
 		return
 	}
 
-	// Materialize the uploaded image to disk for static serving by nginx.
+	// Materialize the uploaded image to disk before the post is committed.
 	writeImageFile(int(pid), mime, filedata)
+
+	if err := tx.Commit(); err != nil {
+		log.Print(err)
+		return
+	}
 
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
 }
@@ -777,12 +761,18 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	comment := r.FormValue("comment")
 	query := "INSERT INTO `comments` (`post_id`, `user_id`, `comment`) VALUES (?,?,?)"
-	_, err = db.ExecContext(ctx, query, postID, me.ID, r.FormValue("comment"))
+	result, err := db.ExecContext(ctx, query, postID, me.ID, comment)
 	if err != nil {
 		log.Print(err)
 		return
 	}
+
+	// Reflect the new comment in the cache (approximate created_at with now;
+	// ordering within a run stays correct).
+	cid, _ := result.LastInsertId()
+	addComment(Comment{ID: int(cid), PostID: postID, UserID: me.ID, Comment: comment, CreatedAt: time.Now()})
 
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }
@@ -917,9 +907,12 @@ func main() {
 	db.SetMaxIdleConns(100)
 	db.SetConnMaxLifetime(0)
 
-	// Warm the in-memory user cache before serving.
+	// Warm the in-memory caches before serving.
 	if err := loadAllUsers(context.Background()); err != nil {
 		log.Fatalf("Failed to load users: %s.", err.Error())
+	}
+	if err := loadAllComments(context.Background()); err != nil {
+		log.Fatalf("Failed to load comments: %s.", err.Error())
 	}
 
 	r := chi.NewRouter()
