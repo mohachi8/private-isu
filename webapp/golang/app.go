@@ -6,6 +6,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
@@ -299,6 +300,8 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 	if err := loadAllComments(ctx); err != nil {
 		log.Print(err)
 	}
+	// Cached post fragments reference comment state, which just reset.
+	clearPostFragments()
 	// Remove run-specific uploaded image files (post id > 10000); seeded images
 	// (id <= 10000) are immutable and kept so they stay materialized on disk.
 	cleanupUploadedImages()
@@ -458,12 +461,13 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	csrf := getCSRFToken(r)
 	indexTmpl.Execute(w, struct {
-		Posts     []Post
+		PostsHTML template.HTML
 		Me        User
 		CSRFToken string
 		Flash     string
-	}{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
+	}{renderPostList(posts, csrf), me, csrf, getFlash(w, r, "notice")})
 }
 
 func getAccountName(w http.ResponseWriter, r *http.Request) {
@@ -529,13 +533,13 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 
 	accountTmpl.Execute(w, struct {
-		Posts          []Post
+		PostsHTML      template.HTML
 		User           User
 		PostCount      int
 		CommentCount   int
 		CommentedCount int
 		Me             User
-	}{posts, user, postCount, commentCount, commentedCount, me})
+	}{renderPostList(posts, getCSRFToken(r)), user, postCount, commentCount, commentedCount, me})
 }
 
 func getPosts(w http.ResponseWriter, r *http.Request) {
@@ -575,7 +579,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	postsTmpl.Execute(w, posts)
+	w.Write([]byte(renderPostList(posts, getCSRFToken(r))))
 }
 
 func getPostsID(w http.ResponseWriter, r *http.Request) {
@@ -780,6 +784,8 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 	// ordering within a run stays correct).
 	cid, _ := result.LastInsertId()
 	addComment(Comment{ID: int(cid), PostID: postID, UserID: me.ID, Comment: comment, CreatedAt: time.Now()})
+	// The post's cached fragment (comment count + latest 3) is now stale.
+	invalidatePostFragment(postID)
 
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }

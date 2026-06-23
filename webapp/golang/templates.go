@@ -8,21 +8,15 @@ import "html/template"
 var tmplFuncs = template.FuncMap{"imageURL": imageURL}
 
 var (
+	// index/account inject a pre-rendered post list (see fragmentcache.go), so
+	// they no longer embed posts.html/post.html.
 	indexTmpl = template.Must(template.New("layout.html").Funcs(tmplFuncs).ParseFiles(
 		getTemplPath("layout.html"),
 		getTemplPath("index.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
 	))
 	accountTmpl = template.Must(template.New("layout.html").Funcs(tmplFuncs).ParseFiles(
 		getTemplPath("layout.html"),
 		getTemplPath("user.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	))
-	postsTmpl = template.Must(template.New("posts.html").Funcs(tmplFuncs).ParseFiles(
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
 	))
 	postIDTmpl = template.Must(template.New("layout.html").Funcs(tmplFuncs).ParseFiles(
 		getTemplPath("layout.html"),
