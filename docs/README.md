@@ -36,6 +36,7 @@
 | [20-posts-cache.md](./20-posts-cache.md) | posts メタデータの全件メモリ化 = Phase 16 |
 | [21-detail-cache-and-json-session.md](./21-detail-cache-and-json-session.md) | 詳細ページHTMLキャッシュ / Cookieセッション脱gob = Phase 17・18 |
 | [22-scoring-mode-ab.md](./22-scoring-mode-ab.md) | 計測モード/本番スコアモードの切替（最終A/B）= Phase 19 |
+| [23-disk-full-regression-fix.md](./23-disk-full-regression-fix.md) | 実環境スコア低下の原因＝run中ディスク満杯と修正 |
 
 ---
 

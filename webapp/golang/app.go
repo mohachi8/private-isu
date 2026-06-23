@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	mysql "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
@@ -248,14 +249,14 @@ func extFromMime(mime string) string {
 // writeImageFile materializes an image to disk so subsequent requests are
 // served by nginx without hitting the app/DB. Best-effort: errors are logged
 // but not fatal (the app can still serve the bytes directly).
-func writeImageFile(pid int, mime string, data []byte) {
+func writeImageFile(pid int, mime string, data []byte) error {
 	ext := extFromMime(mime)
 	if ext == "" {
-		return
+		return fmt.Errorf("unknown mime: %s", mime)
 	}
 	if err := os.MkdirAll(imageDir, 0755); err != nil {
 		log.Print(err)
-		return
+		return err
 	}
 	// Write atomically (temp + rename) so a concurrent GET never sees a
 	// partially-written file.
@@ -263,11 +264,15 @@ func writeImageFile(pid int, mime string, data []byte) {
 	tmp := fmt.Sprintf("%s.tmp%d", path, pid)
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		log.Print(err)
-		return
+		os.Remove(tmp)
+		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		log.Print(err)
+		os.Remove(tmp)
+		return err
 	}
+	return nil
 }
 
 func imageURL(p Post) string {
@@ -665,8 +670,13 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Materialize the uploaded image, then make the post visible via the caches.
-	writeImageFile(int(pid), mime, filedata)
+	// Materialize the uploaded image first. If it fails (e.g. disk full), do NOT
+	// make the post visible — a cached post whose image 404s would fail other
+	// requests that render the index. Surface a 500 for this upload instead.
+	if err := writeImageFile(int(pid), mime, filedata); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	statAddPost(me.ID, int(pid))
 	addPostToCache(Post{ID: int(pid), UserID: me.ID, Body: body, Mime: mime, CreatedAt: time.Now()})
 
@@ -892,6 +902,10 @@ func main() {
 	}
 
 	r := chi.NewRouter()
+	// Recover from any handler panic and return 500 instead of crashing the
+	// whole process (a crash would fail every in-flight + queued request until
+	// systemd restarts it — thousands of cascading failures).
+	r.Use(middleware.Recoverer)
 	// pprof endpoint labels add a small per-request cost; enable only when
 	// profiling (PPROF_LABELS=1), off by default for scoring runs.
 	if os.Getenv("PPROF_LABELS") == "1" {
