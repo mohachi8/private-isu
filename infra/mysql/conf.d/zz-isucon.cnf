@@ -1,0 +1,9 @@
+# ISUCON measurement / tuning settings for MySQL
+# Deployed to /etc/mysql/conf.d/zz-isucon.cnf (loaded last, overrides defaults)
+[mysqld]
+# --- slow query log (for pt-query-digest / mysqldumpslow analysis) ---
+slow_query_log      = 1
+slow_query_log_file = /var/log/mysql/mysql-slow.log
+# long_query_time = 0 logs ALL queries — ideal during a benchmark run.
+# Raise this (e.g. 0.1) for normal operation to reduce log volume.
+long_query_time     = 0
