@@ -27,6 +27,7 @@
 | [11-measurement-session.md](./11-measurement-session.md) | 計測ツール4種（alp/pt-query-digest/pprof/Jaeger）の実践と次の打ち手 |
 | [12-infra-tuning-keepalive-pool.md](./12-infra-tuning-keepalive-pool.md) | インフラ層チューニング（keepalive / DBプール / カーネル）= Phase 8 |
 | [13-remove-imgdata-blob-and-disk.md](./13-remove-imgdata-blob-and-disk.md) | 根本対策：画像BLOBをDBから排除・ディスク満杯解消 = Phase 9 |
+| [14-user-cache.md](./14-user-cache.md) | ユーザーの全件インメモリキャッシュ = Phase 10 |
 
 ---
 
@@ -104,6 +105,7 @@ sudo systemctl start isu-go
 | 計測セッション（確定値）| **155,417** | 4ツールでボトルネック再特定（[11](./11-measurement-session.md)）|
 | Phase 8: インフラ層チューニング | **166,173** | keepalive/DBプールで接続churn激減 |
 | Phase 9: 画像BLOBをDBから排除 | **172,648** | posts 1.5GB→7MB（全DBがメモリに収容）/ ローカルはCPU頭打ち |
+| Phase 10: ユーザー全件キャッシュ | **201,324** | SELECT users(28%)と毎回のユーザー取得を排除 |
 
 GET / の応答時間: **約 1.5 秒 → 約 0.07 秒**（インデックス追加の効果）。
 `/image/*` 応答時間合計: **約 154 秒 → 約 13 秒**（nginx 静的配信の効果）。

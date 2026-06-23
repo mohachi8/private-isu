@@ -99,9 +99,8 @@ func dbInitialize(ctx context.Context) {
 }
 
 func tryLogin(ctx context.Context, accountName, password string) *User {
-	u := User{}
-	err := db.GetContext(ctx, &u, "SELECT * FROM users WHERE account_name = ? AND del_flg = 0", accountName)
-	if err != nil {
+	u, ok := userByName(accountName)
+	if !ok || u.DelFlg != 0 {
 		return nil
 	}
 
@@ -141,20 +140,26 @@ func getSession(r *http.Request) *sessions.Session {
 }
 
 func getSessionUser(r *http.Request) User {
-	ctx := r.Context()
 	session := getSession(r)
 	uid, ok := session.Values["user_id"]
 	if !ok || uid == nil {
 		return User{}
 	}
 
-	u := User{}
-
-	err := db.GetContext(ctx, &u, "SELECT * FROM `users` WHERE `id` = ?", uid)
-	if err != nil {
+	var id int
+	switch v := uid.(type) {
+	case int:
+		id = v
+	case int64:
+		id = int(v)
+	default:
 		return User{}
 	}
 
+	u, ok := userByID(id)
+	if !ok {
+		return User{}
+	}
 	return u
 }
 
@@ -206,22 +211,13 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 		userIDSet[p.UserID] = struct{}{}
 	}
 
-	// 2) Fetch every needed user (post authors + comment authors) in one query.
-	userIDs := make([]int, 0, len(userIDSet))
+	// 2) Resolve every needed user (post authors + comment authors) from the
+	// in-memory user cache instead of querying the DB.
+	userMap := make(map[int]User, len(userIDSet))
 	for id := range userIDSet {
-		userIDs = append(userIDs, id)
-	}
-	usersByID := make(map[int]User, len(userIDs))
-	uq, uargs, err := sqlx.In("SELECT * FROM `users` WHERE `id` IN (?)", userIDs)
-	if err != nil {
-		return nil, err
-	}
-	var us []User
-	if err := db.SelectContext(ctx, &us, db.Rebind(uq), uargs...); err != nil {
-		return nil, err
-	}
-	for _, u := range us {
-		usersByID[u.ID] = u
+		if u, ok := userByID(id); ok {
+			userMap[id] = u
+		}
 	}
 
 	var posts []Post
@@ -235,12 +231,12 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 		// Attach authors and reverse to oldest-first for display.
 		cs := make([]Comment, len(cmts))
 		for i, c := range cmts {
-			c.User = usersByID[c.UserID]
+			c.User = userMap[c.UserID]
 			cs[len(cmts)-1-i] = c
 		}
 		p.Comments = cs
 
-		p.User = usersByID[p.UserID]
+		p.User = userMap[p.UserID]
 		p.CSRFToken = csrfToken
 
 		if p.User.DelFlg == 0 {
@@ -321,6 +317,10 @@ func getTemplPath(filename string) string {
 func getInitialize(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dbInitialize(ctx)
+	// Rebuild the user cache: initialize resets del_flg and removes users id>1000.
+	if err := loadAllUsers(ctx); err != nil {
+		log.Print(err)
+	}
 	// Remove run-specific uploaded image files (post id > 10000); seeded images
 	// (id <= 10000) are immutable and kept so they stay materialized on disk.
 	cleanupUploadedImages()
@@ -420,11 +420,7 @@ func postRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exists := 0
-	// ユーザーが存在しない場合はエラーになるのでエラーチェックはしない
-	db.GetContext(ctx, &exists, "SELECT 1 FROM users WHERE `account_name` = ?", accountName)
-
-	if exists == 1 {
+	if _, taken := userByName(accountName); taken {
 		session := getSession(r)
 		session.Values["notice"] = "アカウント名がすでに使われています"
 		session.Save(r, w)
@@ -433,20 +429,24 @@ func postRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	passhash := calculatePasshash(ctx, accountName, password)
 	query := "INSERT INTO `users` (`account_name`, `passhash`) VALUES (?,?)"
-	result, err := db.ExecContext(ctx, query, accountName, calculatePasshash(ctx, accountName, password))
+	result, err := db.ExecContext(ctx, query, accountName, passhash)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	session := getSession(r)
 	uid, err := result.LastInsertId()
 	if err != nil {
 		log.Print(err)
 		return
 	}
-	session.Values["user_id"] = uid
+	// Add the new user to the cache so login/post lookups see it immediately.
+	cacheUser(User{ID: int(uid), AccountName: accountName, Passhash: passhash})
+
+	session := getSession(r)
+	session.Values["user_id"] = int(uid)
 	session.Values["csrf_token"] = secureRandomStr(16)
 	session.Save(r, w)
 
@@ -491,22 +491,16 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 func getAccountName(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	accountName := r.PathValue("accountName")
-	user := User{}
 
-	err := db.GetContext(ctx, &user, "SELECT * FROM `users` WHERE `account_name` = ? AND `del_flg` = 0", accountName)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-
-	if user.ID == 0 {
+	user, ok := userByName(accountName)
+	if !ok || user.DelFlg != 0 {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
 	results := []Post{}
 
-	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC LIMIT ?", user.ID, postsPerPage)
+	err := db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC LIMIT ?", user.ID, postsPerPage)
 	if err != nil {
 		log.Print(err)
 		return
@@ -849,6 +843,10 @@ func postAdminBanned(w http.ResponseWriter, r *http.Request) {
 	for _, id := range r.Form["uid[]"] {
 		db.ExecContext(ctx, query, 1, id)
 	}
+	// Reflect the del_flg changes in the user cache.
+	if err := loadAllUsers(ctx); err != nil {
+		log.Print(err)
+	}
 
 	http.Redirect(w, r, "/admin/banned", http.StatusFound)
 }
@@ -918,6 +916,11 @@ func main() {
 	db.SetMaxOpenConns(100)
 	db.SetMaxIdleConns(100)
 	db.SetConnMaxLifetime(0)
+
+	// Warm the in-memory user cache before serving.
+	if err := loadAllUsers(context.Background()); err != nil {
+		log.Fatalf("Failed to load users: %s.", err.Error())
+	}
 
 	r := chi.NewRouter()
 
